@@ -564,7 +564,8 @@
     <div class="field">
       <label>Material Code *</label>
       <div class="scan-inline">
-        <input id="issueCode" placeholder="Scan or enter Material Code">
+        <input id="issueCode" placeholder="Scan Batch Barcode or enter Material Code">
+        <div id="fifoStatus" style="display:none;margin-top:10px;padding:12px 14px;border-radius:8px;font-weight:800"></div>
         <button type="button" class="btn secondary scan-btn" onclick="toggleScanner('issueScanner')">▣ Scan</button>
         <button type="button" class="btn primary" onclick="findIssueMaterial()">Find</button>
       </div>
@@ -1740,9 +1741,9 @@ function openRecord(id){
    <div class="kv"><b>Supplier</b><span>${escapeHtml(r.supplier||'-')}</span></div>
    <div class="kv"><b>Received Date</b><span>${escapeHtml(r.date||'-')}</span></div>
    <div class="kv"><b>Remarks</b><span>${escapeHtml(r.remarks||'-')}</span></div>
-   <div style="margin-top:15px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" onclick="downloadMaterialBarcode(${r.id})">Download Barcode</button><button class="btn danger" onclick="closeModal();prepareIssue('${escapeJs(r.code)}')">Issue Material</button></div></div>`;
+   <div style="margin-top:15px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" onclick="downloadMaterialBarcode(${r.id})">Download Barcode</button><button class="btn danger" onclick="closeModal();prepareIssueBatch(${r.id})">Issue Material</button></div></div>`;
   document.getElementById('modal').classList.add('show');
-  if(window.JsBarcode){try{JsBarcode('#modalBarcode',String(r.code),{format:'CODE128',lineColor:'#10243e',background:'#fff',width:2,height:55,displayValue:true,fontSize:11,margin:5});}catch(e){}}
+  if(window.JsBarcode){try{JsBarcode('#modalBarcode',batchBarcodeValue(r),{format:'CODE128',lineColor:'#10243e',background:'#fff',width:2,height:55,displayValue:true,fontSize:11,margin:5});}catch(e){}}
 }
 
 function closeModal(){document.getElementById('modal').classList.remove('show');}
@@ -2031,14 +2032,14 @@ function stopScanner(){
 
 function findIssueMaterial(){
  const scanned=String(document.getElementById('issueCode').value||'').trim();
- if(!scanned){document.getElementById('issueMaterialInfo').classList.remove('show');selectedIssueRecord=null;return;}
+ if(!scanned){document.getElementById('issueMaterialInfo').classList.remove('show');selectedIssueRecord=null;const fs=document.getElementById('fifoStatus');if(fs)fs.style.display='none';return;}
  let r=findBatchByBarcode(scanned),exactBatch=!!r;
  if(!r){
    if(!records.some(x=>String(x.code).toLowerCase()===scanned.toLowerCase())){
-     document.getElementById('issueMaterialInfo').classList.remove('show');selectedIssueRecord=null;alert('Material Code / Batch Barcode not found in the Digital Archive.');return;
+     document.getElementById('issueMaterialInfo').classList.remove('show');selectedIssueRecord=null;const fs=document.getElementById('fifoStatus');if(fs)fs.style.display='none';alert('Material Code / Batch Barcode not found in the Digital Archive.');return;
    }
    r=recommendedBatch(scanned);
-   if(!r){document.getElementById('issueMaterialInfo').classList.remove('show');selectedIssueRecord=null;alert('No available quantity remains for this Material Code.');return;}
+   if(!r){document.getElementById('issueMaterialInfo').classList.remove('show');selectedIssueRecord=null;const fs=document.getElementById('fifoStatus');if(fs)fs.style.display='none';alert('No available quantity remains for this Material Code.');return;}
  }
  selectedIssueRecord=r;
  const oldest=recommendedBatch(r.code),compliant=!oldest||oldest.id===r.id;
@@ -2049,6 +2050,16 @@ function findIssueMaterial(){
  const info=document.getElementById('issueMaterialInfo');
  info.classList.toggle('fifo-warning',!compliant);
  info.classList.toggle('fifo-ok',compliant);
+ const fifoStatus=document.getElementById('fifoStatus');
+ if(fifoStatus){
+   fifoStatus.style.display='block';
+   fifoStatus.style.background=compliant?'#e8f5ec':'#ffe1e1';
+   fifoStatus.style.border=`2px solid ${compliant?'#2e8b57':'#dc2626'}`;
+   fifoStatus.style.color=compliant?'#23753f':'#b91c1c';
+   fifoStatus.innerHTML=compliant
+     ? `✓ FIFO COMPLIANT — Issue ${escapeHtml(batchId(r))} from Location ${escapeHtml(r.bin||'-')}.`
+     : `✖ FIFO NON-COMPLIANT — DO NOT ISSUE ${escapeHtml(batchId(r))}.<br><span style="font-weight:700">Please issue ${escapeHtml(batchId(oldest))} at Location ${escapeHtml(oldest.bin||'-')} instead.</span>`;
+ }
  document.getElementById('issueMeta').innerHTML=`<div class="fifo-title" style="margin-bottom:9px;padding:10px 12px;border-radius:7px;background:${compliant?'#e8f5ec':'#ffe1e1'};color:${compliant?'#23753f':'#b91c1c'};font-weight:800">${notice}</div>`+
    `<b>Material Code:</b> ${escapeHtml(r.code)} &nbsp;|&nbsp; <b>Batch:</b> ${escapeHtml(batchId(r))} &nbsp;|&nbsp; <b>Priority:</b> ${priority} &nbsp;|&nbsp; <b>Bin:</b> ${escapeHtml(r.bin||'-')} &nbsp;|&nbsp; <b>GRN:</b> ${escapeHtml(r.grn||'-')} &nbsp;|&nbsp; <b>Receipt:</b> ${escapeHtml(r.date||'-')}`;
  if(!exactBatch&&oldest)document.getElementById('issueCode').value=oldest.code;
@@ -2059,6 +2070,14 @@ function findIssueMaterial(){
 function prepareIssue(code){
  showPage('issue');
  document.getElementById('issueCode').value=code;
+ findIssueMaterial();
+}
+
+function prepareIssueBatch(id){
+ showPage('issue');
+ const r=records.find(x=>x.id===id);
+ if(!r)return;
+ document.getElementById('issueCode').value=batchBarcodeValue(r);
  findIssueMaterial();
 }
 
@@ -2139,7 +2158,7 @@ function downloadMonthlySummary(){
 function downloadMaterialBarcode(id){
   const r=records.find(x=>x.id===id);if(!r||!window.JsBarcode)return;
   const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
-  try{JsBarcode(svg,String(r.code),{format:'CODE128',lineColor:'#10243e',background:'#ffffff',width:2.5,height:80,displayValue:true,fontOptions:'bold',fontSize:14,margin:10});}catch(e){alert('Unable to generate barcode.');return;}
+  try{JsBarcode(svg,batchBarcodeValue(r),{format:'CODE128',lineColor:'#10243e',background:'#ffffff',width:2.5,height:80,displayValue:true,fontOptions:'bold',fontSize:14,margin:10});}catch(e){alert('Unable to generate barcode.');return;}
   const source='<?xml version="1.0" encoding="UTF-8"?>\n'+svg.outerHTML;
   const blob=new Blob([source],{type:'image/svg+xml;charset=utf-8'});const url=URL.createObjectURL(blob);
   const a=document.createElement('a');a.href=url;a.download=`${r.code}_${batchId(r)}_CODE128.svg`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
